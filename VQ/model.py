@@ -9,7 +9,7 @@ NUM_EMBEDDINGS = 512
 
 class ResidualBlock(nn.Module):
     """
-    implementation of the residual block as described in section 4.1 of the original VQ-VAE paper
+    implementation of the residual block as described in section 4.1 of the original VQ-VAE paper\\
     ReLU -> 3x3 conv -> ReLU -> 1x1 conv -> skip connection
     """
     def __init__(self, channels):
@@ -26,7 +26,7 @@ class ResidualBlock(nn.Module):
 
 class Encoder(nn.Module):
     """
-    maps an 64x64 image tensor to a 8x8 latent tensor
+    maps an 64x64 image tensor to a 8x8 latent tensor\\
     downsample -> residual block -> downsample -> residual block -> downsample -> residual block -> 1x1 conv
     """
     def __init__(self):
@@ -51,7 +51,7 @@ class Encoder(nn.Module):
 
 class Decoder(nn.Module):
     """
-    maps a 8x8 latent tensor to an 64x64 image tensor
+    maps a 8x8 latent tensor to an 64x64 image tensor\\
     1x1 conv -> residual block -> upsample -> residual block -> upsample -> residual block -> upsample
     """
     def __init__(self):
@@ -76,7 +76,7 @@ class Decoder(nn.Module):
 
 class Quantizer(nn.Module):
     """
-        implementation of the codebook with nearnest neighbor lookup
+        implementation of the codebook with nearnest neighbor lookup\\
         the embeddings are parameters to be learnt with gradient descent on the codebook loss (see section 3.2 of the original VQ-VAE paper)
     """
     def __init__(self):
@@ -105,7 +105,7 @@ class Quantizer(nn.Module):
 
 class QuantizerEMA(nn.Module):
     """
-        implementation of the codebook with nearnest neighbor lookup
+        implementation of the codebook with nearnest neighbor lookup\\
         the embeddings are learnt automatically as exponential movig averages of the encoder outputs assigned to them over minibatches (see Appendix A.1 of the original VQ-VAE paper)
     """
     def __init__(self, batch_size, decay=0.99):
