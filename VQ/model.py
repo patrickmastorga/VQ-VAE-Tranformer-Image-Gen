@@ -151,3 +151,46 @@ class QuantizerEMA(nn.Module):
         
         z_q = nn.functional.embedding(indices_flat, self.e).view(B, H, W, EMBEDDING_DIM) # (B, H, W, embedding_dim)
         return z_q.permute(0, 3, 1, 2).contiguous()                                      # (B, embedding_dim, H, W)
+
+class VQ_VAE(nn.Module):
+    """
+        implements the encoder, decoder, and quantizer into a single model for training (with codebook loss) (see section 3.2 of the original VQ-VAE paper)
+    """
+    def __init__(self, encoder: Encoder, decoder: Decoder, quantizer: Quantizer):
+        self.encoder = encoder
+        self.decoder = decoder
+        self.quantizer = quantizer
+    
+    def foward(self, x):
+        z_e = self.encoder(x)
+        z_q = self.quantizer(z_e)
+
+        # straight through estimator
+        z_q_st = z_e + (z_q - z_e).detach()
+
+        codebook_loss = nn.functional.mse_loss(z_e.detach(), z_q)
+        commitment_loss = nn.functional.mse_loss(z_e, z_q.detach())
+        reconstructed = self.decoder(z_q_st)
+
+        return reconstructed, codebook_loss, commitment_loss
+    
+class VQ_VAE_EMA(nn.Module):
+    """
+        implements the encoder, decoder, and quantizer into a single model for training (with EMA dictionalty learning) (see section 3.2/Appendix A.1 of the original VQ-VAE paper)
+    """
+    def __init__(self, encoder: Encoder, decoder: Decoder, quantizer: QuantizerEMA):
+        self.encoder = encoder
+        self.decoder = decoder
+        self.quantizer = quantizer
+    
+    def foward(self, x):
+        z_e = self.encoder(x)
+        z_q = self.quantizer(z_e)
+
+        # straight through estimator
+        z_q_st = z_e + (z_q - z_e).detach()
+
+        commitment_loss = nn.functional.mse_loss(z_e, z_q.detach())
+        reconstructed = self.decoder(z_q_st)
+        
+        return reconstructed, commitment_loss
