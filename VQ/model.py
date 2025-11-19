@@ -87,15 +87,15 @@ class Quantizer(nn.Module):
     def foward(self, z_e):
         B, _, H, W = z_e.shape
 
-        # flatten the embeddings along batch size, height, and width (B, embedding_dim, H, W) -> (BHW, embedding_dim)
+        # flatten the embeddings along batch size, height, and width (B, EMBEDDING_DIM, H, W) -> (BHW, EMBEDDING_DIM)
         z_e_flat = z_e.permute(0, 2, 3, 1).reshape(-1, EMBEDDING_DIM)
 
         # to calculate pairwise distance, use ||z - e||^2 = ||z||^2 - 2z*e + ||e||^2
         with torch.no_grad():
             dist = (
-                z_e_flat.pow(2).sum(1, keepdim=True)        # ||z||^2
-                - 2 * z_e_flat @ self.e.weight.T            # -2z*e
-                + self.e.weight.pow(2).sum(1, keepdim=True) # ||e||^2
+                z_e_flat.pow(2).sum(dim=1, keepdim=True)        # ||z||^2 (BHW, 1)
+                + self.e.weight.pow(2).sum(dim=1).unsqueeze(0)  # ||e||^2 (1, NUM_EMBEDDING)
+                - 2 * z_e_flat @ self.e.weight.T                # -2z*e   (BHW, NUM_EMBEDDING)
             )
         indices_flat = dist.argmin(1)
 
@@ -129,9 +129,9 @@ class QuantizerEMA(nn.Module):
         # to calculate pairwise distance, use ||z - e||^2 = ||z||^2 - 2z*e + ||e||^2
         with torch.no_grad():
             dist = (
-                z_e_flat.pow(2).sum(1, keepdim=True) # ||z||^2
-                - 2 * z_e_flat @ self.e.T            # -2z*e
-                + self.e.pow(2).sum(1, keepdim=True) # ||e||^2
+                z_e_flat.pow(2).sum(dim=1, keepdim=True) # ||z||^2 (BHW, 1)
+                + self.e.pow(2).sum(dim=1).unsqueeze(0)  # ||e||^2 (1, NUM_EMBEDDING)
+                - 2 * z_e_flat @ self.e.T                # -2z*e   (BHW, NUM_EMBEDDING)
             )
         indices_flat = dist.argmin(1)
 
