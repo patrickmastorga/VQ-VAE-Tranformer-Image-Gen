@@ -117,8 +117,9 @@ class QuantizerEMA(nn.Module):
         self.register_buffer('e', self.e)
 
         # EMA running cluster counts and sums
-        self.register_buffer('N', torch.full((NUM_EMBEDDINGS,), batch_size * LATENT_DIM / NUM_EMBEDDINGS))
-        self.register_buffer('m', self.e.clone())
+        expected_count = batch_size * LATENT_DIM / NUM_EMBEDDINGS
+        self.register_buffer('N', torch.full((NUM_EMBEDDINGS,), expected_count))
+        self.register_buffer('m', self.e.clone() * expected_count)
     
     def foward(self, z_e):
         B, _, H, W = z_e.shape
