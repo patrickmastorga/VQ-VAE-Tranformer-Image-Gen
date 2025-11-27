@@ -140,6 +140,7 @@ class VQ_VAE(nn.Module):
         implements the encoder, decoder, and quantizer into a single model for training
     """
     def __init__(self, encoder: Encoder, decoder: Decoder, quantizer: Quantizer, use_EMA=False, beta=0.25):
+        super().__init__()
         self.encoder = encoder
         self.decoder = decoder
         self.quantizer = quantizer
