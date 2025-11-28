@@ -3,7 +3,8 @@ import torch.nn as nn
 
 # these are the hyperparameters used in the original VQ-VAE paper (see section 4.1)
 HIDDEN_CHANNELS = 256
-LATENT_DIM = 8 * 8
+LATENT_W = 8
+LATENT_H = 8
 EMBEDDING_DIM = 64
 NUM_EMBEDDINGS = 512
 
@@ -99,7 +100,7 @@ class Quantizer(nn.Module):
 
             # EMA running cluster counts and sums
             self.decay = decay
-            expected_count = batch_size * LATENT_DIM / NUM_EMBEDDINGS
+            expected_count = batch_size * LATENT_W * LATENT_H / NUM_EMBEDDINGS
             self.register_buffer('N', torch.full((NUM_EMBEDDINGS,), expected_count))
             self.register_buffer('m', self.e.clone() * expected_count)
 
@@ -125,7 +126,8 @@ class Quantizer(nn.Module):
         """
         8x8 index tensor -> 8x8 latent tensor
         """
-        return nn.functional.embedding(x, self.e).permute(0, 3, 1, 2).contiguous()
+        x = nn.functional.embedding(x, self.e)    # (B, H, W, EMBEDDING_DIM)
+        return x.permute(0, 3, 1, 2).contiguous() # (B, EMBEDDING_DIM, H, W)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # flatten the embeddings along batch size, height, and width (B, embedding_dim, H, W) -> (BHW, embedding_dim)
