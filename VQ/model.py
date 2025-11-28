@@ -1,12 +1,15 @@
 import torch
 import torch.nn as nn
 
-# these are the hyperparameters used in the original VQ-VAE paper (see section 4.1)
-HIDDEN_CHANNELS = 256
+# model hyperparemters
 LATENT_W = 8
 LATENT_H = 8
+IMG_W = LATENT_W * 8
+IMG_H = LATENT_H * 8
+
 EMBEDDING_DIM = 64
 NUM_EMBEDDINGS = 512
+HIDDEN_CHANNELS = 256
 
 class ResidualBlock(nn.Module):
     """
@@ -27,24 +30,24 @@ class ResidualBlock(nn.Module):
 
 class Encoder(nn.Module):
     """
-    maps an 64x64 image tensor to a 8x8 latent tensor\\
+    maps an (3, IMG_H, IMG_W) image tensor to a (EMBEDDING_DIM, LATENT_H, LATENT_W) latent tensor\\
     downsample -> residual block -> downsample -> residual block -> downsample -> residual block -> 1x1 conv
     """
     def __init__(self):
         super().__init__()
         self.network = nn.Sequential(
-            # 64x64 image
+            # (3, IMG_H, IMG_W) image
             nn.Conv2d(in_channels=3, out_channels=HIDDEN_CHANNELS, kernel_size=4, stride=2, padding=1),
-            # 32x32 hidden
+            # (HIDDEN_CHANNELS, IMG_H/2, IMG_W/2) hidden
             ResidualBlock(),
             nn.Conv2d(in_channels=HIDDEN_CHANNELS, out_channels=HIDDEN_CHANNELS, kernel_size=4, stride=2, padding=1),
-            # 16x16 hidden
+            # (HIDDEN_CHANNELS, IMG_H/4, IMG_W/4) hidden
             ResidualBlock(),
             nn.Conv2d(in_channels=HIDDEN_CHANNELS, out_channels=HIDDEN_CHANNELS, kernel_size=4, stride=2, padding=1),
-            # 8x8 hidden
+            # (HIDDEN_CHANNELS, IMG_H/8, IMG_W/8) = (HIDDEN_CHANNELS, LATENT_H, LATENT_W) hidden
             ResidualBlock(),
             nn.Conv2d(in_channels=HIDDEN_CHANNELS, out_channels=EMBEDDING_DIM, kernel_size=1),
-            # 8x8 latents
+            # (EMBEDDING_DIM, LATENT_H, LATENT_W) latents
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -52,24 +55,24 @@ class Encoder(nn.Module):
 
 class Decoder(nn.Module):
     """
-    maps a 8x8 quantized latent tensor to an 64x64 image tensor (scaled to [0, 1])\\
+    maps a (EMBEDDING_DIM, LATENT_H, LATENT_W) quantized latent tensor to an (3, IMG_H, IMG_W) image tensor (scaled to [0, 1])\\
     1x1 conv -> residual block -> upsample -> residual block -> upsample -> residual block -> upsample
     """
     def __init__(self):
         super().__init__()
         self.network = nn.Sequential(
-            # 8x8 latents
+            # (EMBEDDING_DIM, LATENT_H, LATENT_W) latents
             nn.Conv2d(in_channels=EMBEDDING_DIM, out_channels=HIDDEN_CHANNELS, kernel_size=1),
-            # 8x8 hidden
+            # (HIDDEN_CHANNELS, LATENT_H, LATENT_W) = (HIDDEN_CHANNELS, IMG_H/8, IMG_W/8) hidden
             ResidualBlock(),
             nn.ConvTranspose2d(in_channels=HIDDEN_CHANNELS, out_channels=HIDDEN_CHANNELS, kernel_size=4, stride=2, padding=1),
-            # 16x16 hidden
+            # (HIDDEN_CHANNELS, IMG_H/4, IMG_W/4) hidden
             ResidualBlock(),
             nn.ConvTranspose2d(in_channels=HIDDEN_CHANNELS, out_channels=HIDDEN_CHANNELS, kernel_size=4, stride=2, padding=1),
-            # 32x32 hidden
+            # (HIDDEN_CHANNELS, IMG_H/2, IMG_W/2) hidden
             ResidualBlock(),
             nn.ConvTranspose2d(in_channels=HIDDEN_CHANNELS, out_channels=3, kernel_size=4, stride=2, padding=1),
-            # 64x64 image
+            # (3, IMG_H, IMG_W) image
             nn.Sigmoid()
         )
 
@@ -106,7 +109,7 @@ class Quantizer(nn.Module):
 
     def nearest_neighbor_indices(self, x: torch.Tensor) -> torch.Tensor:
         """
-        64x64 image tensor -> 8x8 index tensor
+        (EMBEDDING_DIM, LATENT_H, LATENT_W) latent tensor -> (LATENT_H, LATENT_W) index tensor
         """
         # flatten the embeddings along batch size, height, and width (B, embedding_dim, H, W) -> (BHW, embedding_dim)
         B, _, H, W = x.shape
@@ -122,9 +125,9 @@ class Quantizer(nn.Module):
         indices_flat = dist.argmin(1)                                   # (BHW,)
         return indices_flat.view(B, H, W).permute(0, 1, 2).contiguous() # (B, H, W)
     
-    def get_embeddings(self, x: torch.Tensor) -> torch.Tensor:
+    def get_latent_tensor_from_indices(self, x: torch.Tensor) -> torch.Tensor:
         """
-        8x8 index tensor -> 8x8 latent tensor
+        (LATENT_H, LATENT_W) index tensor -> (EMBEDDING_DIM, LATENT_H, LATENT_W) latent tensor
         """
         x = nn.functional.embedding(x, self.e)    # (B, H, W, EMBEDDING_DIM)
         return x.permute(0, 3, 1, 2).contiguous() # (B, EMBEDDING_DIM, H, W)
@@ -176,7 +179,7 @@ class VQ_VAE(nn.Module):
     @torch.no_grad()
     def compute_indices(self, x: torch.Tensor) -> torch.Tensor:
         """
-        64x64 image tensor -> 8x8 index tensor (without computing gradients)
+        (3, IMG_H, IMG_W) image tensor -> (LATENT_H, LATENT_W) index tensor (without computing gradients)
         """
         x = self.encoder(x)
         return self.quantizer.nearest_neighbor_indices(x)
@@ -184,22 +187,22 @@ class VQ_VAE(nn.Module):
     @torch.no_grad()
     def reconstruct_from_indices(self, x: torch.Tensor) -> torch.Tensor:
         """
-        8x8 index tensor -> 64x64 reconstructed image tensor (without computing gradients)
+        (LATENT_H, LATENT_W) index tensor -> (3, IMG_H, IMG_W) reconstructed image tensor (without computing gradients)
         """
-        x = self.quantizer.get_embeddings(x)
+        x = self.quantizer.get_latent_tensor_from_indices(x)
         return self.decoder(x)
 
     @torch.no_grad()
     def reconstruct(self, x: torch.Tensor) -> torch.Tensor:
         """
-        64x64 image tensor -> 64x64 reconstructed image tensor (without computing gradients)
+        (3, IMG_H, IMG_W) image tensor -> (3, IMG_H, IMG_W) reconstructed image tensor (without computing gradients)
         """
         x = self.compute_indices(x)
         return self.reconstruct_from_indices(x)
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
         """
-        64x64 image tensor -> reconstruction_loss, commitment_loss, codebook_loss\\
+        (3, IMG_H, IMG_W) image tensor -> reconstruction_loss, commitment_loss, codebook_loss\\
         if use_EMA=True, codebook_loss is None
         """
         z_e = self.encoder(x)
