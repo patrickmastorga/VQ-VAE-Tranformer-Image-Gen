@@ -1,8 +1,10 @@
 import torch
 import torch.nn as nn
 
-VOCAB_SIZE = 512
+# hyperparameters for model
+VOCAB_SIZE = 512 + 1 # 512 codebooks and 1 BOS token
 SEQ_LEN = 64
+BOS_ID = 512
 
 D_MODEL = 256
 N_HEADS = 4
@@ -35,6 +37,9 @@ class DecoderBlock(nn.Module):
 
 
 class TransformerPrior(nn.Module):
+    """
+    Autoregressive Prior for generating unconditional samples of CelebA embeddings
+    """
     def __init__(self):
         super().__init__()
 
@@ -49,6 +54,22 @@ class TransformerPrior(nn.Module):
         )
         
         self.register_buffer("mask", torch.triu(torch.ones(SEQ_LEN, SEQ_LEN), 1).bool())
+    
+    @torch.no_grad()
+    def generate(self, N: int, temp=1.0) -> torch.Tensor:
+        device = next(self.parameters()).device
+        seq = torch.full((N, 1), BOS_ID, dtype=torch.long, device=device)
+
+        for i in range(SEQ_LEN - 1):
+            logits = self(seq)               # (N, i + 1, VOCAB_SIZE)
+            logits = logits[:, -1, :] / temp # (N, VOCAB_SIZE)
+            
+            probs = torch.softmax(logits, dim=-1)
+            next_token = torch.multinomial(probs, num_samples=1) # (N, 1)
+
+            seq = torch.cat([seq, next_token], dim=1) # (N, i + 2)
+
+        return seq[:, 1:] # (N, SEQ_LEN)
 
     def forward(self, idx: torch.Tensor) -> torch.Tensor:
         B, seq_len = idx.shape
