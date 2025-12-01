@@ -143,11 +143,11 @@ class Decoder(nn.Module):
         mixture_id = torch.distributions.Categorical(logits=logit_pi).sample() # (B, H, W) ??
 
         # gather mixture parameters
-        mixture_id = mixture_id.unsqueeze(1).expand(-1, 6, -1, -1)   # (B, 3, H, W)
-        mixture_params = params[:, :, 1:7]                           # (B, MIXTURE_K, 6, H, W)
-        mixture_params = torch.gather(mixture_params, 1, mixture_id) # (B, 6, H, W)
-        mixture_mu = mixture_params[:, 0:3]                          # (B, 3, H, W)
-        mixture_s = nn.functional.softplus(mixture_params[:, 3:6]) + 1e-8   # (B, 3, H, W)
+        mixture_id = mixture_id.unsqueeze(1).unsqueeze(1).expand(-1, -1, 6, -1, -1) # (B, 1, 6, H, W)
+        mixture_params = params[:, :, 1:7]                                      # (B, MIXTURE_K, 6, H, W)
+        mixture_params = torch.gather(mixture_params, 1, mixture_id).squeeze(1) # (B, 6, H, W)
+        mixture_mu = mixture_params[:, 0:3]                                     # (B, 3, H, W)
+        mixture_s = nn.functional.softplus(mixture_params[:, 3:6]) + 1e-8       # (B, 3, H, W)
 
         # sample logistic noise
         u = torch.rand((B, 1, H, W))
