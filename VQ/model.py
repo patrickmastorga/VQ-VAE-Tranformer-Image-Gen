@@ -2,10 +2,10 @@ import torch
 import torch.nn as nn
 
 # model hyperparemters
-LATENT_W = 8
-LATENT_H = 8
-IMG_W = LATENT_W * 8
-IMG_H = LATENT_H * 8
+LATENT_W = 16
+LATENT_H = 16
+IMG_W = LATENT_W * 4
+IMG_H = LATENT_H * 4
 
 EMBEDDING_DIM = 64
 NUM_EMBEDDINGS = 512
@@ -44,10 +44,7 @@ class Encoder(nn.Module):
             # (HIDDEN_CHANNELS, IMG_H/2, IMG_W/2) hidden
             ResidualBlock(),
             nn.Conv2d(in_channels=HIDDEN_CHANNELS, out_channels=HIDDEN_CHANNELS, kernel_size=4, stride=2, padding=1),
-            # (HIDDEN_CHANNELS, IMG_H/4, IMG_W/4) hidden
-            ResidualBlock(),
-            nn.Conv2d(in_channels=HIDDEN_CHANNELS, out_channels=HIDDEN_CHANNELS, kernel_size=4, stride=2, padding=1),
-            # (HIDDEN_CHANNELS, IMG_H/8, IMG_W/8) = (HIDDEN_CHANNELS, LATENT_H, LATENT_W) hidden
+            # (HIDDEN_CHANNELS, IMG_H/4, IMG_W/4) = (HIDDEN_CHANNELS, LATENT_H, LATENT_W) hidden
             ResidualBlock(),
             nn.Conv2d(in_channels=HIDDEN_CHANNELS, out_channels=EMBEDDING_DIM, kernel_size=1),
             # (EMBEDDING_DIM, LATENT_H, LATENT_W) latents
@@ -72,10 +69,7 @@ class Decoder(nn.Module):
         self.network = nn.Sequential(
             # (EMBEDDING_DIM, LATENT_H, LATENT_W) latents
             nn.Conv2d(in_channels=EMBEDDING_DIM, out_channels=HIDDEN_CHANNELS, kernel_size=1),
-            # (HIDDEN_CHANNELS, LATENT_H, LATENT_W) = (HIDDEN_CHANNELS, IMG_H/8, IMG_W/8) hidden
-            ResidualBlock(),
-            nn.ConvTranspose2d(in_channels=HIDDEN_CHANNELS, out_channels=HIDDEN_CHANNELS, kernel_size=4, stride=2, padding=1),
-            # (HIDDEN_CHANNELS, IMG_H/4, IMG_W/4) hidden
+            # (HIDDEN_CHANNELS, LATENT_H, LATENT_W) = (HIDDEN_CHANNELS, IMG_H/4, IMG_W/4) hidden
             ResidualBlock(),
             nn.ConvTranspose2d(in_channels=HIDDEN_CHANNELS, out_channels=HIDDEN_CHANNELS, kernel_size=4, stride=2, padding=1),
             # (HIDDEN_CHANNELS, IMG_H/2, IMG_W/2) hidden
