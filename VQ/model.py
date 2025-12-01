@@ -102,7 +102,7 @@ class Decoder(nn.Module):
         # split params
         logit_pi = params[:, :, 0]                          # (B, MIXTURE_K, H, W)
         mu = params[:, :, 1:4]                              # (B, MIXTURE_K, 3, H, W)
-        s = torch.nn.functional.softplus(params[:, :, 4:7]) # (B, MIXTURE_K, 3, H, W)
+        s = torch.nn.functional.softplus(params[:, :, 4:7]) + 1e-8 # (B, MIXTURE_K, 3, H, W)
 
         target = target.unsqueeze(1).expand(-1, MIXTURE_K, -1, -1, -1) # (B, MIXTURE_K, 3, H, W)
         edge_left = target == 0    # (B, MIXTURE_K, 3, H, W)
@@ -119,7 +119,7 @@ class Decoder(nn.Module):
 
         # middle bins
         p = cdf_upper - cdf_lower       # (B, MIXTURE_K, 3, H, W)
-        log_p = torch.log(p).sum(dim=2) # (B, MIXTURE_K, H, W)
+        log_p = torch.log(torch.clamp(p, 1e-8, 1.0)).sum(dim=2) # (B, MIXTURE_K, H, W)
 
         # add log mixture weights
         log_pi = nn.functional.log_softmax(logit_pi, dim=1) # (B, MIXTURE_K, H, W)
@@ -147,7 +147,7 @@ class Decoder(nn.Module):
         mixture_params = params[:, :, 1:7]                           # (B, MIXTURE_K, 6, H, W)
         mixture_params = torch.gather(mixture_params, 1, mixture_id) # (B, 6, H, W)
         mixture_mu = mixture_params[:, 0:3]                          # (B, 3, H, W)
-        mixture_s = nn.functional.softplus(mixture_params[:, 3:6])   # (B, 3, H, W)
+        mixture_s = nn.functional.softplus(mixture_params[:, 3:6]) + 1e-8   # (B, 3, H, W)
 
         # sample logistic noise
         u = torch.rand((B, 1, H, W))
