@@ -84,7 +84,7 @@ class Decoder(nn.Module):
             nn.ConvTranspose2d(in_channels=HIDDEN_CHANNELS, out_channels=HIDDEN_CHANNELS, kernel_size=4, stride=2, padding=1),
             # (HIDDEN_CHANNELS, IMG_H, IMG_W) hidden
             ResidualBlock(),
-            nn.Conv2d(in_channels=HIDDEN_CHANNELS, out_channels=7 * MIXTURE_K, kernel_size=1)
+            nn.Conv2d(in_channels=HIDDEN_CHANNELS, out_channels=7 * MIXTURE_K, kernel_size=3, padding=1)
             # (3 * 256, IMG_H, IMG_W) image params
         )
 
