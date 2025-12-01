@@ -6,6 +6,7 @@ LATENT_W = 8
 LATENT_H = 8
 IMG_W = LATENT_W * 8
 IMG_H = LATENT_H * 8
+MIXTURE_K = 10
 
 EMBEDDING_DIM = 64
 NUM_EMBEDDINGS = 512
@@ -83,44 +84,89 @@ class Decoder(nn.Module):
             nn.ConvTranspose2d(in_channels=HIDDEN_CHANNELS, out_channels=HIDDEN_CHANNELS, kernel_size=4, stride=2, padding=1),
             # (HIDDEN_CHANNELS, IMG_H, IMG_W) hidden
             ResidualBlock(),
-            nn.Conv2d(in_channels=HIDDEN_CHANNELS, out_channels=3 * 256, kernel_size=1)
-            # (3 * 256, IMG_H, IMG_W) image logits
+            nn.Conv2d(in_channels=HIDDEN_CHANNELS, out_channels=7 * MIXTURE_K, kernel_size=1)
+            # (3 * 256, IMG_H, IMG_W) image params
         )
 
     @staticmethod
-    def sample_from_logits(logits, temperature=1.0, top_k=None):
+    def dmol_log_likelihood(params: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         """
         Args:
-            logits (torch.Tensor): image logits FloatTensor of shape (B, 256, 3, IMG_H, IMG_W)
+            params (torch.Tensor): image params FloatTensor of shape (B, MIXTURE_K, 7, IMG_H, IMG_W)
+            target (torch.Tensor): image LongTensor of shape (B, 3, IMG_H, IMG_W) in range [0, 255]
+        Returns:
+            log_likelihood (torch.Tensor): log_likelihood tensor of shape ()
+        """
+        B, _, _, H, W = params.shape # (B, MIXTURE_K, 7, H, W)
+
+        # split params
+        logit_pi = params[:, :, 0]                          # (B, MIXTURE_K, H, W)
+        mu = params[:, :, 1:4]                              # (B, MIXTURE_K, 3, H, W)
+        s = torch.nn.functional.softplus(params[:, :, 4:7]) # (B, MIXTURE_K, 3, H, W)
+
+        target = target.unsqueeze(1).expand(-1, MIXTURE_K, -1, -1, -1) # (B, MIXTURE_K, 3, H, W)
+        edge_left = target == 0    # (B, MIXTURE_K, 3, H, W)
+        edge_right = target == 255 # (B, MIXTURE_K, 3, H, W)
+
+        # compute logistic CDF values
+        target = target.float()
+        cdf_upper  = torch.sigmoid((target + 0.5 - mu) / s) # (B, MIXTURE_K, 3, H, W)
+        cdf_lower = torch.sigmoid((target - 0.5 - mu) / s)  # (B, MIXTURE_K, 3, H, W)
+
+        # handle edge cases
+        cdf_upper[edge_right] = 1
+        cdf_lower[edge_left] = 0
+
+        # middle bins
+        p = cdf_upper - cdf_lower       # (B, MIXTURE_K, 3, H, W)
+        log_p = torch.log(p).sum(dim=2) # (B, MIXTURE_K, H, W)
+
+        # add log mixture weights
+        log_pi = nn.functional.log_softmax(logit_pi, dim=1) # (B, MIXTURE_K, H, W)
+        log_mix = log_pi + log_p
+
+        log_prob = torch.logsumexp(log_mix, dim=1) # (B, H, W)
+        return log_prob.mean()
+
+    @staticmethod
+    def sample_from_params(params: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            params (torch.Tensor): image params FloatTensor of shape (B, MIXTURE_K, 7, IMG_H, IMG_W)
         Returns:
             image (torch.Tensor): image LongTensor of shape (B, 3, IMG_H, IMG_W) in range [0, 255]
         """
-        B, _, _, H, W = logits.shape # (B, 256, 3, H, W)
+        B, _, _, H, W = params.shape # (B, MIXTURE_K, 7, H, W)
+        
+        # mixture selection
+        logit_pi = params[:, :, 0].permute(0, 2, 3, 1)                # (B, H, W, MIXTURE_K)
+        mixture_id = torch.distributions.Categorical(logits=logit_pi).sample() # (B, H, W) ??
 
-        # apply temperature scaling
-        logits = logits / temperature
+        # gather mixture parameters
+        mixture_id = mixture_id.unsqueeze(1).expand(-1, 6, -1, -1)   # (B, 3, H, W)
+        mixture_params = params[:, :, 1:7]                           # (B, MIXTURE_K, 6, H, W)
+        mixture_params = torch.gather(mixture_params, 1, mixture_id) # (B, 6, H, W)
+        mixture_mu = mixture_params[:, 0:3]                          # (B, 3, H, W)
+        mixture_s = nn.functional.softplus(mixture_params[:, 3:6])   # (B, 3, H, W)
 
-        # apply top-k filtering
-        if top_k is not None:
-            top_values, _ = torch.topk(logits, top_k, dim=1)
-            kth_largest = top_values[:, -1:, :, :, :]
-            logits[logits < kth_largest] = -torch.inf
+        # sample logistic noise
+        u = torch.rand((B, 1, H, W))
+        logistic_noise = torch.log(u) - torch.log(1 - u)
+        z = mixture_mu + mixture_s * logistic_noise # (B, 3, H, W)
 
-        # sample
-        probs = torch.softmax(logits, dim=1)
-        samples = torch.multinomial(probs.permute(0, 2, 3, 4, 1).reshape(-1, 256), 1)
-        return samples.view(B, 3, H, W)
+        # discretize
+        return torch.floor(torch.clamp(z, -0.5, 255.5) + 0.5).long()
 
     def forward(self, z_q: torch.Tensor) -> torch.Tensor:
         """
         Args:
             z_q (torch.Tensor): quantized latent FloatTensor of shape (B, EMBEDDING_DIM, LATENT_H, LATENT_W)
         Returns:
-            logits (torch.Tensor): image logits FloatTensor of shape (B, 256, 3, IMG_H, IMG_W)
+            params (torch.Tensor): image params FloatTensor of shape (B, MIXTURE_K, 7, IMG_H, IMG_W)
         """
         x = self.network(z_q)
         B, _, H, W = x.shape
-        return x.reshape(B, 256, 3, H, W)
+        return x.reshape(B, MIXTURE_K, 7, H, W)
 
 class Quantizer(nn.Module):
     """
@@ -251,7 +297,7 @@ class VQ_VAE(nn.Module):
         Args:
             x (torch.Tensor): index LongTensor of shape (B, LATENT_H, LATENT_W)
         Returns:
-            logits (torch.Tensor): image logits FloatTensor of shape (B, 256, 3, IMG_H, IMG_W)
+            params (torch.Tensor): image params FloatTensor of shape (B, MIXTURE_K, 7, IMG_H, IMG_W)
         """
         x = self.quantizer.get_latent_tensor_from_indices(indices)
         return self.decoder(x)
@@ -263,12 +309,12 @@ class VQ_VAE(nn.Module):
         Args:
             x (torch.Tensor): image FloatTensor of shape (B, 3, IMG_H, IMG_W) in range [0, 1]
         Returns:
-            logits (torch.Tensor): image logits FloatTensor of shape (B, 256, 3, IMG_H, IMG_W)
+            params (torch.Tensor): image params FloatTensor of shape (B, MIXTURE_K, 7, IMG_H, IMG_W)
         """
         x = self.compute_indices(image)
         return self.reconstruct_from_indices(x)
 
-    def forward(self, input: torch.Tensor, target: torch.Tensor, temp: float = 1.0) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+    def forward(self, input: torch.Tensor, target: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
         """
         Args:
             input (torch.Tensor): image FloatTensor of shape (B, 3, IMG_H, IMG_W) in range [0, 1]
@@ -281,11 +327,10 @@ class VQ_VAE(nn.Module):
 
         # straight through estimator
         z_q_st = z_e + (z_q - z_e).detach()
-        logits = self.decoder(z_q_st)
-        logits /= temp
+        params = self.decoder(z_q_st)
 
         # compute loss
-        reconstruction_loss = nn.functional.cross_entropy(logits, target) # (B, 256, 3, H, W), (B, 3, H, W) integers in [0,255]
+        reconstruction_loss = -self.decoder.dmol_log_likelihood(params, target) # (B, MIXTURE_K, 7, H, W), (B, 3, H, W) integers in [0,255]
         commitment_loss = nn.functional.mse_loss(z_e, z_q.detach())
         if self.use_EMA:
             codebook_loss = nn.functional.mse_loss(z_e.detach(), z_q)
