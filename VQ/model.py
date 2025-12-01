@@ -114,8 +114,8 @@ class Decoder(nn.Module):
         cdf_lower = torch.sigmoid((target - 0.5 - mu) / s)  # (B, MIXTURE_K, 3, H, W)
 
         # handle edge cases
-        cdf_upper[edge_right] = 1
-        cdf_lower[edge_left] = 0
+        cdf_upper = torch.where(edge_right, torch.ones_like(cdf_upper), cdf_upper)
+        cdf_lower = torch.where(edge_left, torch.zeros_like(cdf_lower), cdf_lower)
 
         # middle bins
         p = cdf_upper - cdf_lower       # (B, MIXTURE_K, 3, H, W)
