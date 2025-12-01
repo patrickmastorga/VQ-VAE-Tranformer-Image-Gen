@@ -119,8 +119,9 @@ class Decoder(nn.Module):
         Returns:
             logits (torch.Tensor): image logits FloatTensor of shape (B, 256, 3, IMG_H, IMG_W)
         """
-        B, _, H, W = z_q.shape
-        return self.network(z_q).reshape(B, 256, 3, H, W)
+        x = self.network(z_q)
+        B, _, H, W = x.shape
+        return x.reshape(B, 256, 3, H, W)
 
 class Quantizer(nn.Module):
     """
