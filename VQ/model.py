@@ -155,7 +155,7 @@ class Decoder(nn.Module):
         z = mixture_mu + mixture_s * logistic_noise # (B, 3, H, W)
 
         # discretize
-        return torch.floor(torch.clamp(z, -0.5, 255.5) + 0.5).long()
+        return torch.clamp(z, 0, 255).round().long()
 
     def forward(self, z_q: torch.Tensor) -> torch.Tensor:
         """
