@@ -37,7 +37,10 @@ class Encoder(nn.Module):
         super().__init__()
         self.network = nn.Sequential(
             # (3, IMG_H, IMG_W) image
-            nn.Conv2d(in_channels=3, out_channels=HIDDEN_CHANNELS, kernel_size=4, stride=2, padding=1),
+            nn.Conv2d(in_channels=3, out_channels=HIDDEN_CHANNELS, kernel_size=1),
+            # (HIDDEN_CHANNELS, IMG_H, IMG_W) hidden
+            ResidualBlock(),
+            nn.Conv2d(in_channels=HIDDEN_CHANNELS, out_channels=HIDDEN_CHANNELS, kernel_size=4, stride=2, padding=1),
             # (HIDDEN_CHANNELS, IMG_H/2, IMG_W/2) hidden
             ResidualBlock(),
             nn.Conv2d(in_channels=HIDDEN_CHANNELS, out_channels=HIDDEN_CHANNELS, kernel_size=4, stride=2, padding=1),
@@ -50,8 +53,14 @@ class Encoder(nn.Module):
             # (EMBEDDING_DIM, LATENT_H, LATENT_W) latents
         )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.network(x)
+    def forward(self, image: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            image (torch.Tensor): image FloatTensor of shape (B, 3, IMG_H, IMG_W) in range [0, 1]
+        Returns:
+            z_e (torch.Tensor): encoder output FloatTensor of shape (B, EMBEDDING_DIM, LATENT_H, LATENT_W)
+        """
+        return self.network(image)
 
 class Decoder(nn.Module):
     """
@@ -71,13 +80,47 @@ class Decoder(nn.Module):
             nn.ConvTranspose2d(in_channels=HIDDEN_CHANNELS, out_channels=HIDDEN_CHANNELS, kernel_size=4, stride=2, padding=1),
             # (HIDDEN_CHANNELS, IMG_H/2, IMG_W/2) hidden
             ResidualBlock(),
-            nn.ConvTranspose2d(in_channels=HIDDEN_CHANNELS, out_channels=3, kernel_size=4, stride=2, padding=1),
-            # (3, IMG_H, IMG_W) image
-            nn.Sigmoid()
+            nn.ConvTranspose2d(in_channels=HIDDEN_CHANNELS, out_channels=HIDDEN_CHANNELS, kernel_size=4, stride=2, padding=1),
+            # (HIDDEN_CHANNELS, IMG_H, IMG_W) hidden
+            ResidualBlock(),
+            nn.Conv2d(in_channels=HIDDEN_CHANNELS, out_channels=3 * 256, kernel_size=1)
+            # (3 * 256, IMG_H, IMG_W) image logits
         )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.network(x)
+    @staticmethod
+    def sample_from_logits(logits, temperature=1.0, top_k=None):
+        """
+        Args:
+            logits (torch.Tensor): image logits FloatTensor of shape (B, 256, 3, IMG_H, IMG_W)
+        Returns:
+            image (torch.Tensor): image LongTensor of shape (B, 3, IMG_H, IMG_W) in range [0, 255]
+        """
+        B, _, _, H, W = logits.shape # (B, 256, 3, H, W)
+
+        # apply temperature scaling
+        logits = logits / temperature
+
+        # apply top-k filtering
+        if top_k is not None:
+            top_values, _ = torch.topk(logits, top_k, dim=1)
+            kth_largest = top_values[:, -1:, :, :, :]
+            logits[logits < kth_largest] = -torch.inf
+
+        # sample
+        probs = torch.softmax(logits, dim=1)
+        probs = probs.view(B, 3, 256, H * W)
+        samples = torch.multinomial(probs.permute(0, 2, 3, 4, 1).reshape(-1, 256), 1)
+        return samples.view(B, 3, H, W)
+
+    def forward(self, z_q: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            z_q (torch.Tensor): quantized latent FloatTensor of shape (B, EMBEDDING_DIM, LATENT_H, LATENT_W)
+        Returns:
+            logits (torch.Tensor): image logits FloatTensor of shape (B, 256, 3, IMG_H, IMG_W)
+        """
+        B, _, H, W = z_q.shape
+        return self.network(z_q).reshape(B, 256, 3, H, W)
 
 class Quantizer(nn.Module):
     """
@@ -107,13 +150,16 @@ class Quantizer(nn.Module):
             self.register_buffer('N', torch.full((NUM_EMBEDDINGS,), expected_count))
             self.register_buffer('m', self.e.clone() * expected_count)
 
-    def nearest_neighbor_indices(self, x: torch.Tensor) -> torch.Tensor:
+    def nearest_neighbor_indices(self, z_e: torch.Tensor) -> torch.Tensor:
         """
-        (EMBEDDING_DIM, LATENT_H, LATENT_W) latent tensor -> (LATENT_H, LATENT_W) index tensor
+        Args:
+            z_e (torch.Tensor): encoder output FloatTensor of shape (B, EMBEDDING_DIM, LATENT_H, LATENT_W)
+        Returns:
+            indices (torch.Tensor): index LongTensor of shape (B, LATENT_H, LATENT_W)
         """
         # flatten the embeddings along batch size, height, and width (B, embedding_dim, H, W) -> (BHW, embedding_dim)
-        B, _, H, W = x.shape
-        z_e_flat = x.permute(0, 2, 3, 1).reshape(-1, EMBEDDING_DIM)
+        B, _, H, W = z_e.shape
+        z_e_flat = z_e.permute(0, 2, 3, 1).reshape(-1, EMBEDDING_DIM)
 
         # to calculate pairwise distance, use ||z - e||^2 = ||z||^2 - 2z*e + ||e||^2
         with torch.no_grad():
@@ -125,17 +171,27 @@ class Quantizer(nn.Module):
         indices_flat = dist.argmin(1)                                   # (BHW,)
         return indices_flat.view(B, H, W).permute(0, 1, 2).contiguous() # (B, H, W)
     
-    def get_latent_tensor_from_indices(self, x: torch.Tensor) -> torch.Tensor:
+    def get_latent_tensor_from_indices(self, indices: torch.Tensor) -> torch.Tensor:
         """
-        (LATENT_H, LATENT_W) index tensor -> (EMBEDDING_DIM, LATENT_H, LATENT_W) latent tensor
+        Args:
+            indices (torch.Tensor): index LongTensor of shape (B, LATENT_H, LATENT_W)
+        Returns:
+            z_q (torch.Tensor): quantized latent FloatTensor of shape (B, EMBEDDING_DIM, LATENT_H, LATENT_W)
         """
-        x = nn.functional.embedding(x, self.e)    # (B, H, W, EMBEDDING_DIM)
+        x = nn.functional.embedding(indices, self.e)    # (B, H, W, EMBEDDING_DIM)
         return x.permute(0, 3, 1, 2).contiguous() # (B, EMBEDDING_DIM, H, W)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # flatten the embeddings along batch size, height, and width (B, embedding_dim, H, W) -> (BHW, embedding_dim)
-        B, _, H, W = x.shape
-        z_e_flat = x.permute(0, 2, 3, 1).reshape(-1, EMBEDDING_DIM)
+    def forward(self, z_e: torch.Tensor) -> torch.Tensor:
+        """
+        If use_EMA = True, updates the codebook dictionary
+        Args:
+            z_e (torch.Tensor): encoder output FloatTensor of shape (B, EMBEDDING_DIM, LATENT_H, LATENT_W)
+        Returns:
+            z_q (torch.Tensor): quantized latent FloatTensor of shape (B, EMBEDDING_DIM, LATENT_H, LATENT_W)
+        """
+        # flatten the embeddings along batch size, height, and width
+        B, _, H, W = z_e.shape
+        z_e_flat = z_e.permute(0, 2, 3, 1).reshape(-1, EMBEDDING_DIM)
 
         # to calculate pairwise distance, use ||z - e||^2 = ||z||^2 - 2z*e + ||e||^2
         with torch.no_grad():
@@ -177,43 +233,58 @@ class VQ_VAE(nn.Module):
         self.beta = beta
 
     @torch.no_grad()
-    def compute_indices(self, x: torch.Tensor) -> torch.Tensor:
+    def compute_indices(self, image: torch.Tensor) -> torch.Tensor:
         """
-        (3, IMG_H, IMG_W) image tensor -> (LATENT_H, LATENT_W) index tensor (without computing gradients)
+        with torch.no_grad()
+        Args:
+            x (torch.Tensor): image FloatTensor of shape (B, 3, IMG_H, IMG_W) in range [0, 1]
+        Returns:
+            indices (torch.Tensor): index LongTensor of shape (B, LATENT_H, LATENT_W)
         """
-        x = self.encoder(x)
+        x = self.encoder(image)
         return self.quantizer.nearest_neighbor_indices(x)
 
     @torch.no_grad()
-    def reconstruct_from_indices(self, x: torch.Tensor) -> torch.Tensor:
+    def reconstruct_from_indices(self, indices: torch.Tensor) -> torch.Tensor:
         """
-        (LATENT_H, LATENT_W) index tensor -> (3, IMG_H, IMG_W) reconstructed image tensor (without computing gradients)
+        with torch.no_grad()
+        Args:
+            x (torch.Tensor): index LongTensor of shape (B, LATENT_H, LATENT_W)
+        Returns:
+            logits (torch.Tensor): image logits FloatTensor of shape (B, 256, 3, IMG_H, IMG_W)
         """
-        x = self.quantizer.get_latent_tensor_from_indices(x)
+        x = self.quantizer.get_latent_tensor_from_indices(indices)
         return self.decoder(x)
 
     @torch.no_grad()
-    def reconstruct(self, x: torch.Tensor) -> torch.Tensor:
+    def reconstruct(self, image: torch.Tensor) -> torch.Tensor:
         """
-        (3, IMG_H, IMG_W) image tensor -> (3, IMG_H, IMG_W) reconstructed image tensor (without computing gradients)
+        with torch.no_grad()
+        Args:
+            x (torch.Tensor): image FloatTensor of shape (B, 3, IMG_H, IMG_W) in range [0, 1]
+        Returns:
+            logits (torch.Tensor): image logits FloatTensor of shape (B, 256, 3, IMG_H, IMG_W)
         """
-        x = self.compute_indices(x)
+        x = self.compute_indices(image)
         return self.reconstruct_from_indices(x)
 
-    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+    def forward(self, input: torch.Tensor, target: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
         """
-        (3, IMG_H, IMG_W) image tensor -> reconstruction_loss, commitment_loss, codebook_loss\\
-        if use_EMA=True, codebook_loss is None
+        Args:
+            input (torch.Tensor): image FloatTensor of shape (B, 3, IMG_H, IMG_W) in range [0, 1]
+            target (torch.Tensor): image LongTensor of shape (B, 3, IMG_H, IMG_W) in range [0, 255]
+        Returns:
+            losses (tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]): reconstruction_loss, commitment_loss, codebook_loss; if use_EMA=True, codebook_loss is None
         """
-        z_e = self.encoder(x)
+        z_e = self.encoder(input)
         z_q = self.quantizer(z_e)
 
         # straight through estimator
         z_q_st = z_e + (z_q - z_e).detach()
-        reconstructed = self.decoder(z_q_st)
+        logits = self.decoder(z_q_st)
 
         # compute loss
-        reconstruction_loss = nn.functional.mse_loss(reconstructed, x)
+        reconstruction_loss = nn.functional.cross_entropy(logits, target) # (B, 256, 3, H, W), (B, 3, H, W) integers in [0,255]
         commitment_loss = nn.functional.mse_loss(z_e, z_q.detach())
         if self.use_EMA:
             codebook_loss = nn.functional.mse_loss(z_e.detach(), z_q)
