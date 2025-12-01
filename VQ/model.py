@@ -150,7 +150,7 @@ class Decoder(nn.Module):
         mixture_s = nn.functional.softplus(mixture_params[:, 3:6]) + 1e-8       # (B, 3, H, W)
 
         # sample logistic noise
-        u = torch.rand((B, 1, H, W))
+        u = torch.rand_like(mixture_id).unsqueeze(1)
         logistic_noise = torch.log(u) - torch.log(1 - u)
         z = mixture_mu + mixture_s * logistic_noise # (B, 3, H, W)
 
