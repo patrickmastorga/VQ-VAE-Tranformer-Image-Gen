@@ -268,7 +268,7 @@ class VQ_VAE(nn.Module):
         x = self.compute_indices(image)
         return self.reconstruct_from_indices(x)
 
-    def forward(self, input: torch.Tensor, target: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+    def forward(self, input: torch.Tensor, target: torch.Tensor, temp: float = 1.0) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
         """
         Args:
             input (torch.Tensor): image FloatTensor of shape (B, 3, IMG_H, IMG_W) in range [0, 1]
@@ -282,6 +282,7 @@ class VQ_VAE(nn.Module):
         # straight through estimator
         z_q_st = z_e + (z_q - z_e).detach()
         logits = self.decoder(z_q_st)
+        logits /= temp
 
         # compute loss
         reconstruction_loss = nn.functional.cross_entropy(logits, target) # (B, 256, 3, H, W), (B, 3, H, W) integers in [0,255]
