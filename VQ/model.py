@@ -108,7 +108,6 @@ class Decoder(nn.Module):
 
         # sample
         probs = torch.softmax(logits, dim=1)
-        probs = probs.view(B, 3, 256, H * W)
         samples = torch.multinomial(probs.permute(0, 2, 3, 4, 1).reshape(-1, 256), 1)
         return samples.view(B, 3, H, W)
 
