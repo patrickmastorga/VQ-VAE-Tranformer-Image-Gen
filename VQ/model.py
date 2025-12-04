@@ -255,7 +255,7 @@ class VQ_VAE(nn.Module):
         reconstruction_loss = nn.functional.mse_loss(reconstructed, input)
         commitment_loss = nn.functional.mse_loss(z_e, z_q.detach())
         if self.use_EMA:
+            return reconstruction_loss, commitment_loss, None
+        else:
             codebook_loss = nn.functional.mse_loss(z_e.detach(), z_q)
             return reconstruction_loss, commitment_loss, codebook_loss
-        else:
-            return reconstruction_loss, commitment_loss, None
