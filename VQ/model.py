@@ -108,15 +108,16 @@ class Quantizer(nn.Module):
         self.use_EMA = use_EMA
         self.decay = decay
 
+        # EMA running cluster counts
+        expected_count = batch_size * LATENT_W * LATENT_H / NUM_EMBEDDINGS
+        self.register_buffer('N', torch.full((NUM_EMBEDDINGS,), expected_count))
+
         # codebook dictionary
         if not self.use_EMA:
             self.register_parameter('e', nn.Parameter(torch.randn(NUM_EMBEDDINGS, EMBEDDING_DIM)))
         else:
             self.register_buffer('e', torch.randn(NUM_EMBEDDINGS, EMBEDDING_DIM))
-
-            # EMA running cluster counts and sums
-            expected_count = batch_size * LATENT_W * LATENT_H / NUM_EMBEDDINGS
-            self.register_buffer('N', torch.full((NUM_EMBEDDINGS,), expected_count))
+            # EMA running cluster sums
             self.register_buffer('m', self.e.clone() * expected_count)
 
     def nearest_neighbor_indices(self, z_e: torch.Tensor) -> torch.Tensor:
