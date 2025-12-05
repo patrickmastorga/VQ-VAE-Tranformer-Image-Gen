@@ -97,7 +97,7 @@ class Quantizer(nn.Module):
     if use_EMA=True, embeddings are learnt automatically as exponential moving averages of the encoder outputs assigned to them over minibatches (see Appendix A.1 of the original VQ-VAE paper)\\
     otherwise, the embeddings are parameters to be learnt with gradient descent on the codebook loss (see section 3.2 of the original VQ-VAE paper)
     """
-    def __init__(self, batch_size=128, decay=0.99):
+    def __init__(self, batch_size=128, decay=0.95):
         """
         Args:
             use_EMA (bool): if True, use EMA updates to learn the codebook during training
