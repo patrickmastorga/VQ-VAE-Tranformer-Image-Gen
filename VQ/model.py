@@ -244,6 +244,7 @@ class VQ_VAE(nn.Module):
         Returns:
             losses (tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]): reconstruction_loss, commitment_loss, codebook_loss; if use_EMA=True, codebook_loss is None
         """
+        B = input.shape[0]
         z_e = self.encoder(input)
         z_q = self.quantizer(z_e)
 
@@ -252,7 +253,7 @@ class VQ_VAE(nn.Module):
         reconstructed = self.decoder(z_q_st)
 
         # compute loss
-        reconstruction_loss = nn.functional.mse_loss(reconstructed, input)
+        reconstruction_loss = nn.functional.l1_loss(reconstructed, input, reduction='none') / B
         commitment_loss = nn.functional.mse_loss(z_e, z_q.detach())
         if self.use_EMA:
             return reconstruction_loss, commitment_loss, None
