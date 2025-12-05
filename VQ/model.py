@@ -177,8 +177,6 @@ class Quantizer(nn.Module):
             n_i = torch.bincount(indices_flat, minlength=NUM_EMBEDDINGS).float()
 
             with torch.no_grad():
-                old_e = self.e.clone()
-
                 # current minibatch cluster sums
                 m_i = torch.zeros_like(self.e)
                 m_i.index_add_(0, indices_flat, z_e_flat)
@@ -187,17 +185,6 @@ class Quantizer(nn.Module):
                 self.N = self.decay * self.N + (1 - self.decay) * n_i
                 self.m = self.decay * self.m + (1 - self.decay) * m_i
                 self.e = self.m / (self.N.unsqueeze(1) + 1e-8)
-
-                codebook_delta = (self.e - old_e).norm(dim=1)
-                print("EMA move (min/med/max):",
-                    float(codebook_delta.min()),
-                    float(codebook_delta.median()),
-                    float(codebook_delta.max()))
-                
-                print("Counts (min/med/max):",
-                    float(self.N.min()),
-                    float(self.N.median()),
-                    float(self.N.max()))
 
         z_q = nn.functional.embedding(indices_flat, self.e).view(B, H, W, EMBEDDING_DIM) # (B, H, W, embedding_dim)
         return z_q.permute(0, 3, 1, 2).contiguous()                                      # (B, embedding_dim, H, W)
@@ -266,7 +253,7 @@ class VQ_VAE(nn.Module):
         reconstructed = self.decoder(z_q_st)
 
         # compute loss
-        reconstruction_loss = nn.functional.l1_loss(reconstructed, input, reduction='sum') / B
+        reconstruction_loss = nn.functional.mse_loss(reconstructed, input, reduction='sum') / B
         commitment_loss = nn.functional.mse_loss(z_e, z_q.detach())
         if self.use_EMA:
             return reconstruction_loss, commitment_loss, None
