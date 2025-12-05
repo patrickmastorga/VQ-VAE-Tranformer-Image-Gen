@@ -253,7 +253,7 @@ class VQ_VAE(nn.Module):
         reconstructed = self.decoder(z_q_st)
 
         # compute loss
-        reconstruction_loss = nn.functional.l1_loss(reconstructed, input, reduction='none') / B
+        reconstruction_loss = nn.functional.l1_loss(reconstructed, input, reduction='sum') / B
         commitment_loss = nn.functional.mse_loss(z_e, z_q.detach())
         if self.use_EMA:
             return reconstruction_loss, commitment_loss, None
