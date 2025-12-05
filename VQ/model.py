@@ -116,7 +116,7 @@ class Quantizer(nn.Module):
 
     def initialize_codebook(self, e: torch.Tensor) -> None:
         with torch.no_grad():
-            self.e = nn.Parameter(e.reshape(NUM_EMBEDDINGS, EMBEDDING_DIM))
+            self.e.data.copy_(e.reshape(NUM_EMBEDDINGS, EMBEDDING_DIM)) # type: ignore
 
     def nearest_neighbor_indices(self, z_e: torch.Tensor) -> torch.Tensor:
         """
