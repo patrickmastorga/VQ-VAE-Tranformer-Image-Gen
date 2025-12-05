@@ -159,7 +159,7 @@ class Quantizer(nn.Module):
         z_e_flat = z_e.permute(0, 2, 3, 1).reshape(-1, EMBEDDING_DIM)
 
         # Dead codebook refresh
-        if self.refresh_dead:
+        if refresh_dead:
             p = self.N / self.N.sum() * NUM_EMBEDDINGS
 
             # find codes with p < threshold
