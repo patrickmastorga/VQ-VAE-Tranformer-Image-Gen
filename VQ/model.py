@@ -163,11 +163,12 @@ class Quantizer(nn.Module):
             with torch.no_grad():
                 total = self.N.sum()
                 p = self.N / total * NUM_EMBEDDINGS
-                dead_idx = torch.where(p < 0.01)[0]
+                dead_idx = torch.where(p < 0.001)[0]
                 if len(dead_idx) > 0:
                     choice = torch.randint(0, z_e_flat.shape[0], (len(dead_idx),), device=z_e_flat.device)
                     self.e[dead_idx] = z_e_flat[choice] # type: ignore
                     self.N[dead_idx] = total / NUM_EMBEDDINGS
+                    print(f'Reassigned {len(dead_idx)} codebooks!')
 
         # to calculate pairwise distance, use ||z - e||^2 = ||z||^2 - 2z*e + ||e||^2
         with torch.no_grad():
