@@ -106,6 +106,7 @@ class Quantizer(nn.Module):
         """
         super().__init__()
         self.use_EMA = use_EMA
+        self.decay = decay
 
         # codebook dictionary
         if not self.use_EMA:
@@ -114,7 +115,6 @@ class Quantizer(nn.Module):
             self.register_buffer('e', torch.randn(NUM_EMBEDDINGS, EMBEDDING_DIM))
 
             # EMA running cluster counts and sums
-            self.decay = decay
             expected_count = batch_size * LATENT_W * LATENT_H / NUM_EMBEDDINGS
             self.register_buffer('N', torch.full((NUM_EMBEDDINGS,), expected_count))
             self.register_buffer('m', self.e.clone() * expected_count)
@@ -172,19 +172,20 @@ class Quantizer(nn.Module):
         indices_flat = dist.argmin(1)
 
         # EMA codebook update
-        if self.use_EMA and self.training:
-            # current minibatch cluster counts
-            n_i = torch.bincount(indices_flat, minlength=NUM_EMBEDDINGS).float()
-
-            with torch.no_grad():
-                # current minibatch cluster sums
-                m_i = torch.zeros_like(self.e)
-                m_i.index_add_(0, indices_flat, z_e_flat)
-
-                # EMA updates
+        with torch.no_grad():
+            if self.training:
+                # current minibatch cluster counts
+                n_i = torch.bincount(indices_flat, minlength=NUM_EMBEDDINGS).float()
                 self.N = self.decay * self.N + (1 - self.decay) * n_i
-                self.m = self.decay * self.m + (1 - self.decay) * m_i
-                self.e = self.m / (self.N.unsqueeze(1) + 1e-8)
+
+                if self.use_EMA:
+                    # current minibatch cluster sums
+                    m_i = torch.zeros_like(self.e)
+                    m_i.index_add_(0, indices_flat, z_e_flat)
+                    self.m = self.decay * self.m + (1 - self.decay) * m_i
+
+                    # EMA updates
+                    self.e = self.m / (self.N.unsqueeze(1) + 1e-8)
 
         z_q = nn.functional.embedding(indices_flat, self.e).view(B, H, W, EMBEDDING_DIM) # (B, H, W, embedding_dim)
         return z_q.permute(0, 3, 1, 2).contiguous()                                      # (B, embedding_dim, H, W)
