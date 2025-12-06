@@ -239,7 +239,7 @@ class Quantizer(nn.Module):
 
                 # dead codebook refresh
                 p = self.N / self.N.sum() * NUM_EMBEDDINGS # type: ignore
-                dead_idx = torch.where(p < 0.001)[0]
+                dead_idx = torch.where(p < 0.0001)[0]
                 if len(dead_idx) > 0:
                     choice = torch.randint(0, z_e_flat.shape[0], (len(dead_idx),), device=z_e_flat.device)
                     self.e[dead_idx] = z_e_flat[choice] # type: ignore
