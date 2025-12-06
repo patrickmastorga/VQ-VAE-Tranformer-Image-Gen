@@ -94,15 +94,14 @@ class Decoder(nn.Module):
 class Quantizer(nn.Module):
     """
     implementation of the codebook with nearnest neighbor lookup\\
-    if use_EMA=True, embeddings are learnt automatically as exponential moving averages of the encoder outputs assigned to them over minibatches (see Appendix A.1 of the original VQ-VAE paper)\\
-    otherwise, the embeddings are parameters to be learnt with gradient descent on the codebook loss (see section 3.2 of the original VQ-VAE paper)
+    The dictionary of embeddings are parameters to be learnt with gradient descent on the codebook loss (see section 3.2 of the original VQ-VAE paper)
+    Dueing training, keeps a running average of the cluster counts
     """
     def __init__(self, batch_size=128, decay=0.95):
         """
         Args:
-            use_EMA (bool): if True, use EMA updates to learn the codebook during training
-            batch_size (int): used to initialize the EMA running cluster counts/sums
-            decay (float): EMA decay parameter
+            batch_size (int): used to initialize the running cluster counts
+            decay (float): Decay parameter for the running cluster counts
         """
         super().__init__()
         self.decay = decay
@@ -115,10 +114,15 @@ class Quantizer(nn.Module):
         self.register_parameter('e', nn.Parameter(torch.randn(NUM_EMBEDDINGS, EMBEDDING_DIM)))
 
     def initialize_codebook(self, e: torch.Tensor) -> None:
+        """
+        Initializes the codebook from a Tensor
+        Args:
+            e (torch.Tensor): a Tensor of shape (NUM_EMBEDDINGS, EMBEDDING_DIM) to initialize the codebook with
+        """
         with torch.no_grad():
             self.e.data.copy_(e.reshape(NUM_EMBEDDINGS, EMBEDDING_DIM)) # type: ignore
 
-    def nearest_neighbor_indices(self, z_e: torch.Tensor) -> torch.Tensor:
+    def get_indices_from_latent_tensor(self, z_e: torch.Tensor) -> torch.Tensor:
         """
         Args:
             z_e (torch.Tensor): encoder output FloatTensor of shape (B, EMBEDDING_DIM, LATENT_H, LATENT_W)
@@ -151,13 +155,12 @@ class Quantizer(nn.Module):
 
     def forward(self, z_e: torch.Tensor, refresh_dead: bool = False) -> torch.Tensor:
         """
-        If use_EMA = True, updates the codebook dictionary
         Args:
             z_e (torch.Tensor): encoder output FloatTensor of shape (B, EMBEDDING_DIM, LATENT_H, LATENT_W)
+            refresh_dead (bool): if True, reinitializes the codebook embeddings with <0.1% ideal use rate with a random encoder output
         Returns:
             z_q (torch.Tensor): quantized latent FloatTensor of shape (B, EMBEDDING_DIM, LATENT_H, LATENT_W)
         """
-
         # flatten the embeddings along batch size, height, and width (B, embedding_dim, H, W) -> (BHW, embedding_dim)
         B, _, H, W = z_e.shape
         z_e_flat = z_e.permute(0, 2, 3, 1).reshape(-1, EMBEDDING_DIM)
@@ -171,7 +174,7 @@ class Quantizer(nn.Module):
                 if len(dead_idx) > 0:
                     choice = torch.randint(0, z_e_flat.shape[0], (len(dead_idx),), device=z_e_flat.device)
                     self.e[dead_idx] = z_e_flat[choice] # type: ignore
-                    self.N[dead_idx] = total / NUM_EMBEDDINGS
+                    self.N[dead_idx] = total / NUM_EMBEDDINGS # give a small initialization to the cluster count
                     print(f'Reassigned {len(dead_idx)} codebooks!')
 
         # to calculate pairwise distance, use ||z - e||^2 = ||z||^2 - 2z*e + ||e||^2
@@ -213,7 +216,7 @@ class VQ_VAE(nn.Module):
             indices (torch.Tensor): index LongTensor of shape (B, LATENT_H, LATENT_W)
         """
         x = self.encoder(image)
-        return self.quantizer.nearest_neighbor_indices(x)
+        return self.quantizer.get_indices_from_latent_tensor(x)
 
     @torch.no_grad()
     def reconstruct_from_indices(self, indices: torch.Tensor) -> torch.Tensor:
@@ -246,7 +249,6 @@ class VQ_VAE(nn.Module):
         Returns:
             losses (tuple[torch.Tensor, torch.Tensor, torch.Tensor]): reconstruction_loss, commitment_loss, codebook_loss
         """
-        B = input.shape[0]
         z_e = self.encoder(input)
         z_q = self.quantizer(z_e, refresh_dead)
 
@@ -255,7 +257,7 @@ class VQ_VAE(nn.Module):
         reconstructed = self.decoder(z_q_st)
 
         # compute loss
-        reconstruction_loss = nn.functional.mse_loss(reconstructed, input, reduction='sum') / B
+        reconstruction_loss = nn.functional.mse_loss(reconstructed, input, reduction='sum') / input.shape[0]
         commitment_loss = nn.functional.mse_loss(z_e, z_q.detach())
         codebook_loss = nn.functional.mse_loss(z_e.detach(), z_q)
         return reconstruction_loss, commitment_loss, codebook_loss
