@@ -71,7 +71,7 @@ class Encoder(nn.Module):
         super().__init__()
         self.network = nn.Sequential(
             # (3, IMG_H, IMG_W) image
-            nn.Conv2d(in_channels=HIDDEN_CHANNELS, out_channels=HIDDEN_CHANNELS, kernel_size=4, stride=2, padding=1),
+            nn.Conv2d(in_channels=3, out_channels=HIDDEN_CHANNELS, kernel_size=4, stride=2, padding=1),
             # (HIDDEN_CHANNELS, IMG_H/2, IMG_W/2) hidden
             ResidualBlock(HIDDEN_CHANNELS),
             nn.Conv2d(in_channels=HIDDEN_CHANNELS, out_channels=HIDDEN_CHANNELS, kernel_size=4, stride=2, padding=1),
