@@ -243,6 +243,7 @@ class Quantizer(nn.Module):
                 if len(dead_idx) > 0:
                     choice = torch.randint(0, z_e_flat.shape[0], (len(dead_idx),), device=z_e_flat.device)
                     self.e[dead_idx] = z_e_flat[choice] # type: ignore
+                    self.m[dead_idx] = z_e_flat[choice] * self.N.sum() / NUM_EMBEDDINGS # type: ignore
                     self.N[dead_idx] = self.N.sum() / NUM_EMBEDDINGS # give a small initialization to the cluster count # type: ignore
                     print(f'Reassigned {len(dead_idx)} codebooks!')
 
