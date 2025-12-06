@@ -97,7 +97,7 @@ class Quantizer(nn.Module):
     The dictionary of embeddings are parameters to be learnt with gradient descent on the codebook loss (see section 3.2 of the original VQ-VAE paper)
     Dueing training, keeps a running average of the cluster counts
     """
-    def __init__(self, batch_size=128, decay=0.95):
+    def __init__(self, batch_size=128, decay=0.995):
         """
         Args:
             batch_size (int): used to initialize the running cluster counts
