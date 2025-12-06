@@ -155,7 +155,7 @@ class Quantizer(nn.Module):
         # EMA running cluster counts/sums
         self.expected_count = batch_size * LATENT_W * LATENT_H / NUM_EMBEDDINGS
         self.register_buffer('N', torch.full((NUM_EMBEDDINGS,), self.expected_count))
-        self.register_buffer('m', self.e.clone() * expected_count) # type: ignore
+        self.register_buffer('m', self.e.clone() * self.expected_count) # type: ignore
 
     def initialize_codebook(self, e: torch.Tensor) -> None:
         """
