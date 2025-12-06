@@ -237,6 +237,15 @@ class Quantizer(nn.Module):
                 self.m.mul_(self.decay).add_((1.0 - self.decay) * m_i) # type: ignore
                 self.e.copy_(self.m / (self.N.unsqueeze(1) + 1e-8)) # type: ignore
 
+                # dead codebook refresh
+                p = self.N / self.N.sum() * NUM_EMBEDDINGS # type: ignore
+                dead_idx = torch.where(p < 0.0001)[0]
+                if len(dead_idx) > 0:
+                    choice = torch.randint(0, z_e_flat.shape[0], (len(dead_idx),), device=z_e_flat.device)
+                    self.e[dead_idx] = z_e_flat[choice] # type: ignore
+                    self.N[dead_idx] = self.N.sum() / NUM_EMBEDDINGS # give a small initialization to the cluster count # type: ignore
+                    print(f'Reassigned {len(dead_idx)} codebooks!')
+
         return z_q
 
 class VQ_VAE(nn.Module):
