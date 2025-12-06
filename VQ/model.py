@@ -153,9 +153,20 @@ class Quantizer(nn.Module):
         self.register_buffer('e', torch.randn(NUM_EMBEDDINGS, EMBEDDING_DIM))
 
         # EMA running cluster counts/sums
-        expected_count = batch_size * LATENT_W * LATENT_H / NUM_EMBEDDINGS
-        self.register_buffer('N', torch.full((NUM_EMBEDDINGS,), expected_count))
+        self.expected_count = batch_size * LATENT_W * LATENT_H / NUM_EMBEDDINGS
+        self.register_buffer('N', torch.full((NUM_EMBEDDINGS,), self.expected_count))
         self.register_buffer('m', self.e.clone() * expected_count) # type: ignore
+
+    def initialize_codebook(self, e: torch.Tensor) -> None:
+        """
+        Initializes the codebook from a Tensor
+        Args:
+            e (torch.Tensor): a Tensor of shape (NUM_EMBEDDINGS, EMBEDDING_DIM) to initialize the codebook with
+        """
+        with torch.no_grad():
+            self.e.data.copy_(e.reshape(NUM_EMBEDDINGS, EMBEDDING_DIM)) # type: ignore
+            self.m.data.copy_(e.reshape(NUM_EMBEDDINGS, EMBEDDING_DIM)) # type: ignore
+            self.N.data.copy_(torch.full((NUM_EMBEDDINGS,), self.expected_count)) # type: ignore
 
     def get_indices_from_latent_tensor(self, z_e: torch.Tensor) -> torch.Tensor:
         """
