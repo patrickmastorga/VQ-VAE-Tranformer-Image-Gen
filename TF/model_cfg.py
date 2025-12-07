@@ -3,7 +3,7 @@ import torch.nn as nn
 
 # hyperparameters for model
 # CELEBA_ATTRIBUTES = ['Attractive', 'Smiling', 'Young', 'Male', 'Blonde_Hair', 'Black_Hair', 'Brown_Hair', 'Gray_Hair', 'Bald', 'Glasses', 'No_Beard']
-K = 12
+K = 11
 VOCAB_SIZE = 512
 SEQ_LEN = 256
 BOS_ID = VOCAB_SIZE + 1
