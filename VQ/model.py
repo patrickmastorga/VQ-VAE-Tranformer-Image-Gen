@@ -13,39 +13,70 @@ HIDDEN_CHANNELS = 256
 
 class ResidualBlock(nn.Module):
     """
-    implementation of the residual block as described in section 4.1 of the original VQ-VAE paper\\
-    ReLU -> 3x3 conv -> ReLU -> 1x1 conv -> skip connection
+    Convolutional residual block for 2D data of shape (B, C, H, W)\\
+    GN -> SiLU -> 3x3 conv -> GN -> SiLU -> 1x1 conv -> skip connection
     """
-    def __init__(self):
+    def __init__(self, channels: int):
         super().__init__()
-        self.network = nn.Sequential(
-            nn.ReLU(),
-            nn.Conv2d(HIDDEN_CHANNELS, HIDDEN_CHANNELS, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(HIDDEN_CHANNELS, HIDDEN_CHANNELS, kernel_size=1)
+        self.layers = nn.Sequential(
+            nn.GroupNorm(32, channels),
+            nn.SiLU(),
+            nn.Conv2d(channels, channels, kernel_size=3, padding=1),
+
+            nn.GroupNorm(32, channels),
+            nn.SiLU(),
+            nn.Conv2d(channels, channels, kernel_size=3, padding=1)
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return x + self.network(x)
+        return x + self.layers(x)
+    
+class SelfAttentionBlock2d(nn.Module):
+    """
+    Self-attention block over 2D data of shape (B, C, H, W)\\
+    Uses MultiheadAttention on flattened (H*W) positions.
+    """
+    def __init__(self, channels: int, num_heads: int = 4):
+        super().__init__()
+        self.norm1 = nn.LayerNorm(channels)
+        self.attn = nn.MultiheadAttention(embed_dim=channels, num_heads=num_heads, batch_first=True)
+        self.norm2 = nn.LayerNorm(channels)
+        self.ff = nn.Sequential(
+            nn.Linear(channels, 4 * channels),
+            nn.SiLU(),
+            nn.Linear(4 * channels, channels)
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        B, C, H, W = x.shape
+        x_flat = x.view(B, C, H*W).permute(0, 2, 1)  # (B, HW, C)
+
+        # x = x + attn(norm(x))
+        x_norm = self.norm1(x_flat)
+        x_attn, _ = self.attn(x_norm, x_norm, x_norm, need_weights=False)
+        x_flat = x_flat + x_attn
+
+        # x = x + ff(norm(x))
+        x_flat = x_flat + self.ff(self.norm2(x_flat))
+        
+        return x_flat.permute(0, 2, 1).view(B, C, H, W)
 
 class Encoder(nn.Module):
     """
+    Simple ResNet style encoder
     maps an (3, IMG_H, IMG_W) image tensor to a (EMBEDDING_DIM, LATENT_H, LATENT_W) latent tensor\\
-    downsample -> residual block -> downsample -> residual block -> downsample -> residual block -> 1x1 conv
+    downsample -> residual block -> downsample -> residual block -> 1x1 conv
     """
     def __init__(self):
         super().__init__()
         self.network = nn.Sequential(
             # (3, IMG_H, IMG_W) image
-            nn.Conv2d(in_channels=3, out_channels=HIDDEN_CHANNELS, kernel_size=1),
-            # (HIDDEN_CHANNELS, IMG_H, IMG_W) hidden
-            ResidualBlock(),
-            nn.Conv2d(in_channels=HIDDEN_CHANNELS, out_channels=HIDDEN_CHANNELS, kernel_size=4, stride=2, padding=1),
+            nn.Conv2d(in_channels=3, out_channels=HIDDEN_CHANNELS, kernel_size=4, stride=2, padding=1),
             # (HIDDEN_CHANNELS, IMG_H/2, IMG_W/2) hidden
-            ResidualBlock(),
+            ResidualBlock(HIDDEN_CHANNELS),
             nn.Conv2d(in_channels=HIDDEN_CHANNELS, out_channels=HIDDEN_CHANNELS, kernel_size=4, stride=2, padding=1),
             # (HIDDEN_CHANNELS, IMG_H/4, IMG_W/4) = (HIDDEN_CHANNELS, LATENT_H, LATENT_W) hidden
-            ResidualBlock(),
+            ResidualBlock(HIDDEN_CHANNELS),
             nn.Conv2d(in_channels=HIDDEN_CHANNELS, out_channels=EMBEDDING_DIM, kernel_size=1),
             # (EMBEDDING_DIM, LATENT_H, LATENT_W) latents
         )
@@ -61,8 +92,9 @@ class Encoder(nn.Module):
 
 class Decoder(nn.Module):
     """
+    Complex decoder with attention layer at lowest resolution and nearest neighbor upsampling with residual blocks
     maps a (EMBEDDING_DIM, LATENT_H, LATENT_W) quantized latent tensor to an (3, IMG_H, IMG_W) image tensor (scaled to [0, 1])\\
-    1x1 conv -> residual block -> upsample -> residual block -> upsample -> residual block -> upsample
+    1x1 conv -> resblocks + attn -> upsample + conv -> resblocks -> upsample + conv -> resblocks -> 1x1 conv + sigmoid
     """
     def __init__(self):
         super().__init__()
@@ -70,13 +102,25 @@ class Decoder(nn.Module):
             # (EMBEDDING_DIM, LATENT_H, LATENT_W) latents
             nn.Conv2d(in_channels=EMBEDDING_DIM, out_channels=HIDDEN_CHANNELS, kernel_size=1),
             # (HIDDEN_CHANNELS, LATENT_H, LATENT_W) = (HIDDEN_CHANNELS, IMG_H/4, IMG_W/4) hidden
-            ResidualBlock(),
-            nn.ConvTranspose2d(in_channels=HIDDEN_CHANNELS, out_channels=HIDDEN_CHANNELS, kernel_size=4, stride=2, padding=1),
+
+            ResidualBlock(HIDDEN_CHANNELS),
+            SelfAttentionBlock2d(HIDDEN_CHANNELS),
+            ResidualBlock(HIDDEN_CHANNELS),
+
+            nn.Upsample(scale_factor=2, mode='nearest'),
+            nn.Conv2d(HIDDEN_CHANNELS, HIDDEN_CHANNELS, kernel_size=3, padding=1),
             # (HIDDEN_CHANNELS, IMG_H/2, IMG_W/2) hidden
-            ResidualBlock(),
-            nn.ConvTranspose2d(in_channels=HIDDEN_CHANNELS, out_channels=HIDDEN_CHANNELS, kernel_size=4, stride=2, padding=1),
+
+            ResidualBlock(HIDDEN_CHANNELS),
+            ResidualBlock(HIDDEN_CHANNELS),
+
+            nn.Upsample(scale_factor=2, mode='nearest'),
+            nn.Conv2d(HIDDEN_CHANNELS, HIDDEN_CHANNELS, kernel_size=3, padding=1),
             # (HIDDEN_CHANNELS, IMG_H, IMG_W) hidden
-            ResidualBlock(),
+
+            ResidualBlock(HIDDEN_CHANNELS),
+            ResidualBlock(HIDDEN_CHANNELS),
+
             nn.Conv2d(in_channels=HIDDEN_CHANNELS, out_channels=3, kernel_size=1),
             nn.Sigmoid()
             # (3, IMG_H, IMG_W) image
@@ -94,33 +138,37 @@ class Decoder(nn.Module):
 class Quantizer(nn.Module):
     """
     implementation of the codebook with nearnest neighbor lookup\\
-    The dictionary of embeddings are parameters to be learnt with gradient descent on the codebook loss (see section 3.2 of the original VQ-VAE paper)
-    Dueing training, keeps a running average of the cluster counts
+    Embeddings are learnt automatically as exponential moving averages of the cluster assignments over minibatches (see Appendix A.1 of "Neural Discrete Representational Learning")\\
     """
-    def __init__(self, batch_size=128, decay=0.995):
+    def __init__(self, batch_size=0, decay=0.99):
         """
         Args:
-            batch_size (int): used to initialize the running cluster counts
-            decay (float): Decay parameter for the running cluster counts
+            batch_size (int): used to initialize the EMA running cluster counts/sums
+            decay (float): EMA decay parameter
         """
         super().__init__()
         self.decay = decay
-
-        # Running cluster counts
-        self.expected_count = batch_size * LATENT_W * LATENT_H / NUM_EMBEDDINGS
-        self.register_buffer('N', torch.full((NUM_EMBEDDINGS,), self.expected_count))
+        self.batch_size = batch_size
 
         # codebook dictionary
-        self.register_parameter('e', nn.Parameter(torch.randn(NUM_EMBEDDINGS, EMBEDDING_DIM)))
+        self.register_buffer('e', torch.randn(NUM_EMBEDDINGS, EMBEDDING_DIM))
 
-    def initialize_codebook(self, e: torch.Tensor) -> None:
+        # EMA running cluster counts/sums
+        expected_count = self.batch_size * LATENT_W * LATENT_H / NUM_EMBEDDINGS
+        self.register_buffer('N', torch.full((NUM_EMBEDDINGS,), expected_count))
+        self.register_buffer('m', self.e.clone() * expected_count) # type: ignore
+
+    def initialize_codebook(self, e: torch.Tensor, p: torch.Tensor) -> None:
         """
         Initializes the codebook from a Tensor
         Args:
-            e (torch.Tensor): a Tensor of shape (NUM_EMBEDDINGS, EMBEDDING_DIM) to initialize the codebook with
+            e (torch.Tensor): a FloatTensor of shape (NUM_EMBEDDINGS, EMBEDDING_DIM) to initialize the codebook with
+            p (torch.Tensor): a FLoatTensor of shape (NUM_EMBEDDINGS,) containing relative cluster proportions (they sum to 1)
         """
         with torch.no_grad():
-            self.e.data.copy_(e.reshape(NUM_EMBEDDINGS, EMBEDDING_DIM)) # type: ignore
+            self.e.data.copy_(e) # type: ignore
+            self.N.data.copy_(self.batch_size * LATENT_W * LATENT_H * p) # type: ignore
+            self.m.data.copy_(e * self.N.unsqueeze(1)) # type: ignore
 
     def get_indices_from_latent_tensor(self, z_e: torch.Tensor) -> torch.Tensor:
         """
@@ -153,29 +201,16 @@ class Quantizer(nn.Module):
         x = nn.functional.embedding(x, self.e)    # (B, H, W, EMBEDDING_DIM) # type: ignore
         return x.permute(0, 3, 1, 2).contiguous() # (B, EMBEDDING_DIM, H, W)
 
-    def forward(self, z_e: torch.Tensor, refresh_dead: bool = False) -> torch.Tensor:
+    def forward(self, z_e: torch.Tensor) -> torch.Tensor:
         """
         Args:
             z_e (torch.Tensor): encoder output FloatTensor of shape (B, EMBEDDING_DIM, LATENT_H, LATENT_W)
-            refresh_dead (bool): if True, reinitializes the codebook embeddings with <0.1% ideal use rate with a random encoder output
         Returns:
             z_q (torch.Tensor): quantized latent FloatTensor of shape (B, EMBEDDING_DIM, LATENT_H, LATENT_W)
         """
         # flatten the embeddings along batch size, height, and width (B, embedding_dim, H, W) -> (BHW, embedding_dim)
         B, _, H, W = z_e.shape
         z_e_flat = z_e.permute(0, 2, 3, 1).reshape(-1, EMBEDDING_DIM)
-
-        # Dead codebook refresh
-        if refresh_dead:
-            with torch.no_grad():
-                total = self.N.sum()
-                p = self.N / total * NUM_EMBEDDINGS
-                dead_idx = torch.where(p < 0.001)[0]
-                if len(dead_idx) > 0:
-                    choice = torch.randint(0, z_e_flat.shape[0], (len(dead_idx),), device=z_e_flat.device)
-                    self.e[dead_idx] = z_e_flat[choice] # type: ignore
-                    self.N[dead_idx] = total / NUM_EMBEDDINGS # give a small initialization to the cluster count
-                    print(f'Reassigned {len(dead_idx)} codebooks!')
 
         # to calculate pairwise distance, use ||z - e||^2 = ||z||^2 - 2z*e + ||e||^2
         with torch.no_grad():
@@ -186,13 +221,31 @@ class Quantizer(nn.Module):
             )
         indices_flat = dist.argmin(1)
 
+        # lookup z_q from embedding codebook
         z_q = nn.functional.embedding(indices_flat, self.e).view(B, H, W, EMBEDDING_DIM) # (B, H, W, embedding_dim) # type: ignore
         z_q = z_q.permute(0, 3, 1, 2).contiguous()                                       # (B, embedding_dim, H, W)
 
-        # update current minibatch cluster counts
+        # EMA update
         if self.training:
-            n_i = torch.bincount(indices_flat, minlength=NUM_EMBEDDINGS).float()
-            self.N = self.decay * self.N + (1 - self.decay) * n_i
+            with torch.no_grad():
+                n_i = torch.bincount(indices_flat, minlength=NUM_EMBEDDINGS).float()
+                m_i = torch.zeros_like(self.e) # type: ignore
+                m_i.index_add_(0, indices_flat, z_e_flat)
+
+                # in-place EMA updates
+                self.N.mul_(self.decay).add_((1.0 - self.decay) * n_i) # type: ignore
+                self.m.mul_(self.decay).add_((1.0 - self.decay) * m_i) # type: ignore
+                self.e.copy_(self.m / (self.N.unsqueeze(1) + 1e-8)) # type: ignore
+
+                # dead codebook refresh
+                p = self.N / self.N.sum() * NUM_EMBEDDINGS # type: ignore
+                dead_idx = torch.where(p < 0.0001)[0]
+                if len(dead_idx) > 0:
+                    choice = torch.randint(0, z_e_flat.shape[0], (len(dead_idx),), device=z_e_flat.device)
+                    self.e[dead_idx] = z_e_flat[choice] # type: ignore
+                    self.m[dead_idx] = z_e_flat[choice] * self.N.sum() / NUM_EMBEDDINGS # type: ignore
+                    self.N[dead_idx] = self.N.sum() / NUM_EMBEDDINGS # give a small initialization to the cluster count # type: ignore
+                    print(f'Reassigned {len(dead_idx)} codebooks!')
 
         return z_q
 
@@ -242,22 +295,21 @@ class VQ_VAE(nn.Module):
         x = self.compute_indices(image)
         return self.reconstruct_from_indices(x)
 
-    def forward(self, input: torch.Tensor, refresh_dead: bool = False) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+    def forward(self, input: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
             input (torch.Tensor): image FloatTensor of shape (B, 3, IMG_H, IMG_W) in range [0, 1]
         Returns:
-            losses (tuple[torch.Tensor, torch.Tensor, torch.Tensor]): reconstruction_loss, commitment_loss, codebook_loss
+            losses (tuple[torch.Tensor, torch.Tensor]): reconstruction_loss, commitment_loss
         """
         z_e = self.encoder(input)
-        z_q = self.quantizer(z_e, refresh_dead)
+        z_q = self.quantizer(z_e)
 
         # straight through estimator
         z_q_st = z_e + (z_q - z_e).detach()
         reconstructed = self.decoder(z_q_st)
 
-        # compute loss
-        reconstruction_loss = nn.functional.mse_loss(reconstructed, input, reduction='sum') / input.shape[0]
+        # compute losses
+        reconstruction_loss = nn.functional.l1_loss(reconstructed, input)
         commitment_loss = nn.functional.mse_loss(z_e, z_q.detach())
-        codebook_loss = nn.functional.mse_loss(z_e.detach(), z_q)
-        return reconstruction_loss, commitment_loss, codebook_loss
+        return reconstruction_loss, commitment_loss

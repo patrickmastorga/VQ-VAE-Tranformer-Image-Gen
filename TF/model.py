@@ -2,37 +2,44 @@ import torch
 import torch.nn as nn
 
 # hyperparameters for model
-VOCAB_SIZE = 512 + 1 # 512 codebooks and 1 BOS token
-SEQ_LEN = 64
-BOS_ID = 512
+VOCAB_SIZE = 512
+SEQ_LEN = 256
+BOS_ID = VOCAB_SIZE + 1
 
 D_MODEL = 256
 N_HEADS = 4
 N_LAYERS = 6
-D_FF = 4 * D_MODEL
 DROPOUT = 0.1
 
 class DecoderBlock(nn.Module):
     """
-    Implementation of the "Attention is All You Need" style decoder block
+    Standard decoder self-attention block with causal masking
     """
-    def __init__(self):
+    def __init__(self, d_model: int, n_heads: int, dropout: float):
         super().__init__()
-        self.attn = nn.MultiheadAttention(embed_dim=D_MODEL, num_heads=N_HEADS, dropout=DROPOUT, batch_first=True)
-        self.layer_norm1 = nn.LayerNorm(D_MODEL)
-        self.feed_foward = nn.Sequential(
-            nn.Linear(D_MODEL, D_FF),
+        self.norm1 = nn.LayerNorm(d_model)
+        self.attn = nn.MultiheadAttention(embed_dim=d_model, num_heads=n_heads, dropout=DROPOUT, batch_first=True)
+        self.norm2 = nn.LayerNorm(d_model)
+        self.ff = nn.Sequential(
+            nn.Linear(d_model, d_model * 4),
             nn.GELU(),
-            nn.Linear(D_FF, D_MODEL),
-            nn.Dropout(DROPOUT)
+            nn.Linear(d_model * 4, d_model),
+            nn.Dropout(dropout)
         )
-        self.layer_norm2 = nn.LayerNorm(D_MODEL)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x_attn, _ = self.attn(x, x, x, is_casual=True)
-        x = self.layer_norm1(x + x_attn)
-        x_ff = self.feed_foward(x)
-        return self.layer_norm2(x + x_ff)
+    def forward(self, x: torch.Tensor, attn_mask: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x (torch.Tensor) A FloatTensor of shape (B, S, D_MODEL) where S is the sequence we are attending over
+            attn_mask (torch.Tensor) A BoolTensor of shape (S, S) where attn_mask[i, j] = True means the ith token cannot attend to the jth token
+        Returns:
+            transformed (torch.Tensor) A FloatTensor of shape (B, S, D_MODEL) of transformed embeddings
+        """
+        B, S, D = x.shape
+        x_norm = self.norm1(x)
+        x_attn, _ = self.attn(x_norm, x_norm, x_norm, attn_mask=attn_mask)
+        x = x + x_attn
+        return x + self.ff(self.norm2(x))
 
 
 class TransformerPrior(nn.Module):
@@ -41,15 +48,23 @@ class TransformerPrior(nn.Module):
     """
     def __init__(self):
         super().__init__()
-        self.token_embedding = nn.Embedding(VOCAB_SIZE, D_MODEL)
+        self.token_embedding = nn.Embedding(VOCAB_SIZE + 1, D_MODEL) # VOCAB_SIZE codebooks and 1 BOS token
         self.positional_embedding = nn.Embedding(SEQ_LEN, D_MODEL)
-        self.decoder_stack = nn.Sequential(*[DecoderBlock() for _ in range(N_LAYERS)])
+        self.decoder_stack = nn.ModuleList([DecoderBlock(D_MODEL, N_HEADS, DROPOUT) for _ in range(N_LAYERS)])
         self.to_logits = nn.Linear(D_MODEL, VOCAB_SIZE)
 
+        self.register_buffer("causal_mask", torch.triu(torch.ones(SEQ_LEN, SEQ_LEN), diagonal=1).bool())
+
     @torch.no_grad()
-    def generate(self, N: int, temp=1.0) -> torch.Tensor:
-        device = next(self.parameters()).device
-        seq = torch.full((N, 1), BOS_ID, dtype=torch.long, device=device)
+    def generate(self, N: int, temp: float = 1.0) -> torch.Tensor:
+        """
+        Args:
+            N (int): The number of sequences to generate
+            temp (float): divides the logits before sampling
+        Returns:
+            sequences (torch.Tensor): A LongTensor of shape (N, SEQ_LEN) of generates sequences
+        """
+        seq = torch.full((N, 1), BOS_ID, dtype=torch.long, device=next(self.parameters()).device)
 
         for i in range(SEQ_LEN):
             logits = self(seq)               # (N, i + 1, VOCAB_SIZE)
@@ -61,8 +76,18 @@ class TransformerPrior(nn.Module):
         return seq[:, 1:] # (N, SEQ_LEN)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        B, seq_len = x.shape
-        pos = torch.arange(seq_len, device=x.device)
-        x = self.token_embedding(x) + self.positional_embedding(pos)
-        x = self.decoder_stack(x)
+        """
+        Args:
+            x (torch.Tensor) a LongTensor of shape (B, S) of integer ids
+        Returns:
+            logits (torch.Tensor) a FloatTensor of shape (B, S, VOCAB_SIZE) of predicted next token logits
+        """
+        B, S = x.shape
+    
+        pos = torch.arange(S, device=x.device)
+        x = self.token_embedding(x) + self.positional_embedding(pos) # (B, S, D) + (S, D)
+
+        mask = self.causal_mask[:S, :S] # type: ignore
+        for i in range(N_LAYERS):
+            x = self.decoder_stack[i](x, attn_mask=mask)
         return self.to_logits(x)
