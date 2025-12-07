@@ -38,7 +38,7 @@ class DecoderBlock(nn.Module):
         """
         B, S, D = x.shape
         x_norm = self.norm1(x)
-        x_attn, _ = self.attn(x_norm, x_norm, x_norm, attn_mask=self.causal_mask[:S, :S], is_casual=True) # type: ignore
+        x_attn, _ = self.attn(x_norm, x_norm, x_norm, attn_mask=self.causal_mask[:S, :S]) # type: ignore
         x = x + x_attn
         return x + self.ff(self.norm2(x))
 
