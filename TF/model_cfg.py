@@ -6,7 +6,7 @@ import torch.nn as nn
 K = 11
 VOCAB_SIZE = 512
 SEQ_LEN = 256
-BOS_ID = VOCAB_SIZE + 1
+BOS_ID = VOCAB_SIZE
 
 D_MODEL = 256
 N_HEADS = 4
@@ -65,7 +65,7 @@ class CFGTransformerPrior(nn.Module):
         """
         B, S = x.shape
 
-        attr_ids = attrs + torch.arange(0, 3 * K, 3, device=attrs.device).unsqueeze(0) + VOCAB_SIZE + 2 # (B, K)
+        attr_ids = attrs + torch.arange(0, 3 * K, 3, device=attrs.device).unsqueeze(0) + BOS_ID + 1 # (B, K)
     
         pos = torch.arange(S, device=x.device)
         x = self.token_embedding(x) + self.positional_embedding(pos) # (B, S, D) + (S, D)
