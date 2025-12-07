@@ -3,7 +3,7 @@ import torch.nn as nn
 
 # hyperparameters for model
 VOCAB_SIZE = 512 + 1 # 512 codebooks and 1 BOS token
-SEQ_LEN = 64
+SEQ_LEN = 256
 BOS_ID = 512
 
 D_MODEL = 256
