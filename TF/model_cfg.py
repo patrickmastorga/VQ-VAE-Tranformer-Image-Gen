@@ -31,7 +31,7 @@ class CFGTransformerPrior(nn.Module):
         self.attn_mask[:K, :K] = False # attribute tokens can always attend to each other # type: ignore
 
     @torch.no_grad()
-    def generate(self, N: int, attrs: torch.Tensor, w: float, temp: float = 1.0) -> torch.Tensor:
+    def generate(self, N: int, attrs: torch.Tensor, w: float = 1.0, temp: float = 1.0) -> torch.Tensor:
         """
         Args:
             N (int): The number of sequences to generate
