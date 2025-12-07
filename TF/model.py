@@ -14,25 +14,33 @@ DROPOUT = 0.1
 
 class DecoderBlock(nn.Module):
     """
-    Implementation of the "Attention is All You Need" style decoder block
+    Standard decoder self-attention block with causal masking
     """
     def __init__(self):
         super().__init__()
+        self.norm1 = nn.LayerNorm(D_MODEL)
         self.attn = nn.MultiheadAttention(embed_dim=D_MODEL, num_heads=N_HEADS, dropout=DROPOUT, batch_first=True)
-        self.layer_norm1 = nn.LayerNorm(D_MODEL)
-        self.feed_foward = nn.Sequential(
+        self.norm2 = nn.LayerNorm(D_MODEL)
+        self.ff = nn.Sequential(
             nn.Linear(D_MODEL, D_FF),
             nn.GELU(),
             nn.Linear(D_FF, D_MODEL),
             nn.Dropout(DROPOUT)
         )
-        self.layer_norm2 = nn.LayerNorm(D_MODEL)
+        self.register_buffer("causal_mask", torch.triu(torch.ones(SEQ_LEN, SEQ_LEN), 1).bool())
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x_attn, _ = self.attn(x, x, x, is_casual=True)
-        x = self.layer_norm1(x + x_attn)
-        x_ff = self.feed_foward(x)
-        return self.layer_norm2(x + x_ff)
+        """
+        Args:
+            x (torch.Tensor) A FloatTensor of shape (B, S, D_MODEL) where S is the sequence we are attending over
+        Returns:
+            transformed (torch.Tensor) A FloatTensor of shape (B, S, D_MODEL) of transformed embeddings
+        """
+        B, S, D = x.shape
+        x_norm = self.norm1(x)
+        x_attn, _ = self.attn(x_norm, x_norm, x_norm, attn_mask=self.causal_mask[:S, :S], is_casual=True) # type: ignore
+        x = x + x_attn
+        return x + self.ff(self.norm2(x))
 
 
 class TransformerPrior(nn.Module):
@@ -61,8 +69,14 @@ class TransformerPrior(nn.Module):
         return seq[:, 1:] # (N, SEQ_LEN)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        B, seq_len = x.shape
-        pos = torch.arange(seq_len, device=x.device)
-        x = self.token_embedding(x) + self.positional_embedding(pos)
+        """
+        Args:
+            x (torch.Tensor) a LongTensor of shape (B, S) of integer ids
+        Returns:
+            logits (torch.Tensor) a FloatTensor of shape (B, S, VOCAB_SIZE) of predicted next token logits
+        """
+        B, S = x.shape
+        pos = torch.arange(S, device=x.device)
+        x = self.token_embedding(x) + self.positional_embedding(pos) # (B, S, D) + (S, D)
         x = self.decoder_stack(x)
         return self.to_logits(x)
