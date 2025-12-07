@@ -65,7 +65,7 @@ class CFGTransformerPrior(nn.Module):
         """
         B, S = x.shape
 
-        attr_ids = attrs + torch.arange(0, 3 * K, 3).unsqueeze(0) + VOCAB_SIZE + 2 # (B, K)
+        attr_ids = attrs + torch.arange(0, 3 * K, 3, device=attrs.device).unsqueeze(0) + VOCAB_SIZE + 2 # (B, K)
     
         pos = torch.arange(S, device=x.device)
         x = self.token_embedding(x) + self.positional_embedding(pos) # (B, S, D) + (S, D)
