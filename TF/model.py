@@ -51,7 +51,7 @@ class TransformerPrior(nn.Module):
         self.token_embedding = nn.Embedding(VOCAB_SIZE + 1, D_MODEL) # VOCAB_SIZE codebooks and 1 BOS token
         self.positional_embedding = nn.Embedding(SEQ_LEN, D_MODEL)
         self.decoder_stack = nn.ModuleList([DecoderBlock(D_MODEL, N_HEADS, DROPOUT) for _ in range(N_LAYERS)])
-        self.to_logits = nn.Linear(D_MODEL, VOCAB_SIZE + 1) # REMOVE THIS LATER!
+        self.to_logits = nn.Linear(D_MODEL, VOCAB_SIZE)
 
         self.register_buffer("causal_mask", torch.triu(torch.ones(SEQ_LEN, SEQ_LEN), diagonal=1).bool())
 
